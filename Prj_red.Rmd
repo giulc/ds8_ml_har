@@ -1,0 +1,199 @@
+---
+title: "Practical Machine Learning Class - Project"
+author: "giulc"
+date: "12/2014"
+output:
+  html_document: default
+  pdf_document:
+    fig_caption: yes
+    keep_tex: no
+---
+
+```{r global_options, include=FALSE}
+library(knitr)
+knitr::opts_chunk
+opts_chunk$set(fig.width=7, fig.height=3.5)
+```
+
+### Scope of Work
+
+The aim of this code is to predict how well some participants to a study on physical activity do excercises, in particular weight lifting. Reference shall be made to http://groupware.les.inf.puc-rio.br/har for more info on the dataset on human activity recognition.
+First of all, the relevant libraries are loaded and the working directory is set.
+
+```{r init}
+### Initialization
+#Libraries of interest are loaded.
+library(ggplot2)
+library(RCurl)
+library(caret)
+library(randomForest)
+library(ipred)
+library("doSNOW")
+coresnum <- makeCluster(2)
+setwd("~/Documenti/Coursera/DS8_ML/Prj")
+```
+
+### Data Loading and Exploratory Analysis
+
+The train and test datasets are (down)loaded.
+
+```{r DataLoading}
+#turl <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+#train <- read.csv(text = turl)
+#remove(turl)
+#turl <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+#test <- read.csv(text = turl)
+#remove(turl)
+training_data <- read.csv("dataset/pml-training.csv",
+                          header=TRUE, sep=",",
+                          na.strings=c("NA", "#DIV/0!"))
+testing_data <- read.csv("dataset/pml-testing.csv",
+                         header=TRUE, sep=",",
+                         na.strings=c("NA", "#DIV/0!"))
+set.seed(32355)
+```
+
+The datasets are cleaned by removing all the columns containing at least one NA value. Even the first seven columns are removed since not useful for model fitting, and eventually the columns which show zero covariates are detected and removed (if any). Getting rid of these data should allow a better model fitting performance.
+
+```{r exploratory}
+training <- training_data[, colSums(is.na(testing_data))==0]
+testing <- testing_data[, colSums(is.na(testing_data))==0]
+# Removing unuseful columns
+training <- training[, -c(1:7)]
+testing <- testing[, -c(1:7)]
+# Removing zero covariates (if any)
+nsv <- nearZeroVar(testing, saveMetrics = TRUE)
+training <- training[,!nsv[,4]]
+testing <- testing[,!nsv[,4]]
+remove(nsv)
+```
+
+The training dataset is then splitted into a proper training data set and a testing dataset, so that the accuracy of the predictions can be evaluated before applying the model to the *real* testing dataset.
+
+The *classe* variable is the one to be predicted, using all the remaining variables as predictors.
+
+```{r splitting1}
+inTrain <- createDataPartition(y = training$classe,
+                               p = 0.70, list=FALSE)
+tr1 <- training[inTrain, ]
+te1 <- training[-inTrain, ]
+remove(inTrain)
+```
+
+Three algorithms are chosen for prediction: classification trees, bagging and random forests.
+
+```{r ModelFit1}
+
+tr1 <- tr1[sample(nrow(tr1), 7000),]
+
+registerDoSNOW(coresnum)
+
+# Classification trees
+M1_tr1_ct <- train(classe ~ ., method="rpart", data=tr1)
+M1_pred <- predict(M1_tr1_ct, newdata=te1)
+M1_CM <- confusionMatrix(M1_pred, te1$classe)
+M1_pred_i <- predict(M1_tr1_ct, newdata=tr1)
+M1_CM_i <- confusionMatrix(M1_pred_i, tr1$classe)
+
+# Bagging
+M2_tr1_bag <- train(classe ~., method="treebag", data=tr1)
+M2_pred <- predict(M2_tr1_bag, newdata=te1)
+M2_CM <- confusionMatrix(M2_pred, te1$classe)
+M2_pred_i <- predict(M2_tr1_bag, newdata=tr1)
+M2_CM_i <- confusionMatrix(M2_pred_i, tr1$classe)
+
+# Random Forest with caret
+M3_tr1_rf1 <- train(classe ~., method="rf", data=tr1)
+M3_pred <- predict(M3_tr1_rf1, newdata=te1)
+M3_CM <- confusionMatrix(M3_pred, te1$classe)
+M3_pred_i <- predict(M3_tr1_rf1, newdata=tr1)
+M3_CM_i <- confusionMatrix(M3_pred_i, tr1$classe)
+
+# Random Forest with randomForest
+M4_tr1_rf2 <- randomForest(classe ~., data=tr1)
+M4_pred <- predict(M4_tr1_rf2, newdata=te1)
+M4_CM <- confusionMatrix(M4_pred, te1$classe)
+M4_pred_i <- predict(M4_tr1_rf2, newdata=tr1)
+M4_CM_i <- confusionMatrix(M4_pred_i, tr1$classe)
+
+stopCluster(coresnum)
+
+```
+
+The in and out of sample errors of the different models are printed below.
+
+```{r Errors1}
+
+# In sample errors
+acc_in <- c(M1_CM_i$overall[1],
+            M2_CM_i$overall[1],
+            M3_CM_i$overall[1],
+            M4_CM_i$overall[1])
+acc_in
+
+# Out of sample errors
+acc_out <- c(M1_CM$overall[1],
+             M2_CM$overall[1],
+             M3_CM$overall[1],
+             M4_CM$overall[1])
+acc_out
+
+overall <- data.frame(M1_CM$overall,
+                      M2_CM$overall,
+                      M3_CM$overall,
+                      M4_CM$overall)
+overall
+
+# Best machine learning algorithm
+print(M3_tr1_rf1, digits = 3)
+print(M4_tr1_rf2, digits = 3)
+
+```
+
+The classification trees accuracy is quite low.
+The most accurate model is the random forest, however the testing *classe* are predicted with all four models and compared to each other.
+Except for the classification tree, the accuracies are quite high.
+The in-sample error for the random forest model is `r round(1-acc_in[4], 2)*100`%.
+The out-of-sample error for the random forest model is `r round(1-acc_out[4], 2)*100`%.
+
+```{r TestCase}
+pred_testing1 <- predict(M1_tr1_ct, newdata=testing[,-53])
+pred_testing2 <- predict(M2_tr1_bag, newdata=testing[,-53])
+pred_testing3 <- predict(M3_tr1_rf1, newdata=testing[,-53])
+pred_testing4 <- predict(M4_tr1_rf2, newdata=testing[,-53])
+
+p_final <- data.frame(pred_testing1,
+                      pred_testing2,
+                      pred_testing3,
+                      pred_testing4)
+p_final
+```
+
+The random forests predictions all agree on the testing set results, therefore the following answers are written to text files for autograder evaluation.
+
+```{r Txt2Autograder, echo=TRUE, eval=FALSE}
+answers <- c(as.character(pred_testing4))
+answers
+
+# Function which writes files for automatic assignment
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,
+                quote=FALSE,
+                row.names=FALSE,
+                col.names=FALSE)
+  }
+}
+
+# Write the 20 answers (testing data frame)
+# NB: this call is commented on purpose
+# pml_write_files(answers)
+```
+
+### References
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H.
+"Qualitative Activity Recognition of Weight Lifting Exercises".
+*Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013.*
